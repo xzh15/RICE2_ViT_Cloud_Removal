@@ -1,8 +1,10 @@
 import os
 
 import torch
+from torch.utils.data import DataLoader, Subset
 
 from datasets import create_dataloaders
+from datasets.rice2_dataset import RICE2Dataset
 from models import ViTRestoration
 from losses import ReconstructionLoss
 from validate import validate
@@ -25,7 +27,7 @@ def main():
 
     num_workers = 0
 
-    epochs = 20
+    epochs = 500
 
     learning_rate = 1e-4
     weight_decay = 1e-4
@@ -75,18 +77,50 @@ def main():
     print("Device:", device)
 
     # ========================================================
-    # 4. 创建 DataLoader
+    # 4. 创建 DataLoader（只使用 100.png ~ 103.png 共 4 张图）
     # ========================================================
 
-    train_loader, val_loader, test_loader = create_dataloaders(
+    full_dataset = RICE2Dataset(
         root_dir=data_root,
         image_size=image_size,
+        use_mask=True,
+    )
+
+    target_filenames = {f"{i}.png" for i in range(100, 104)}
+
+    target_indices = [
+        idx
+        for idx, name in enumerate(full_dataset.filenames)
+        if name in target_filenames
+    ]
+
+    if len(target_indices) != len(target_filenames):
+        raise RuntimeError(
+            f"目标图片未全部找到，只在数据集中匹配到 {len(target_indices)} 张，"
+            f"期望 {len(target_filenames)} 张：{sorted(target_filenames)}"
+        )
+
+    mini_dataset = Subset(full_dataset, target_indices)
+
+    print(
+        f"Mini dataset size: {len(mini_dataset)} "
+        f"(files: {sorted(target_filenames)})"
+    )
+
+    train_loader = DataLoader(
+        dataset=mini_dataset,
         batch_size=batch_size,
-        train_ratio=train_ratio,
-        val_ratio=val_ratio,
-        test_ratio=test_ratio,
-        seed=seed,
+        shuffle=True,
         num_workers=num_workers,
+        pin_memory=True,
+    )
+
+    val_loader = DataLoader(
+        dataset=mini_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
     )
 
     # ========================================================
@@ -144,7 +178,6 @@ def main():
         # ----------------------------------------------------
 
         for batch in train_loader:
-
             cloud = batch["cloud"].to(device)
             label = batch["label"].to(device)
 
@@ -188,8 +221,8 @@ def main():
             current_batch_size = cloud.size(0)
 
             total_train_loss += (
-                loss.item()
-                * current_batch_size
+                    loss.item()
+                    * current_batch_size
             )
 
             total_train_samples += (
@@ -201,8 +234,8 @@ def main():
         # ----------------------------------------------------
 
         train_loss = (
-            total_train_loss
-            / total_train_samples
+                total_train_loss
+                / total_train_samples
         )
 
         # ====================================================
@@ -233,7 +266,6 @@ def main():
         # ====================================================
 
         if val_psnr > best_psnr:
-
             best_psnr = val_psnr
 
             torch.save(
